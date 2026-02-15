@@ -5,7 +5,7 @@ import { parseJobCards, parseJobDetail, parseCompanyPage, isLoginWall } from './
 import {
     sleep, randomDelay, extractJobId, normalizeUrl,
     extractCompanySlug, buildSearchUrl, buildHumanSearchUrl, toGuestApiUrl,
-    getStartParam, setStartParam, formatPostedAt,
+    getStartParam, setStartParam, formatPostedAt, getLinkedInOrigin,
 } from './utils.js';
 
 // ────────────────────────────────────────────────────────────────
@@ -202,22 +202,30 @@ async function handleSearch(request, $, response) {
 
     const searchInputUrl = request.userData.inputUrl || inputUrl || '';
 
+    let skippedDuplicates = 0;
     for (const card of cards) {
         if (totalScraped >= maxItems) break;
-        if (scrapedIds.has(card.id)) continue;
+        if (scrapedIds.has(card.id)) {
+            skippedDuplicates++;
+            continue;
+        }
         scrapedIds.add(card.id);
 
         const cardWithInput = { ...card, inputUrl: searchInputUrl };
 
         if (scrapeJobDetails) {
+            const jobOrigin = getLinkedInOrigin(card.link || card.companyLinkedinUrl);
             await requestQueue.addRequest({
-                url: `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${card.id}`,
+                url: `${jobOrigin}/jobs-guest/jobs/api/jobPosting/${card.id}`,
                 uniqueKey: `detail-${card.id}`,
                 userData: { type: 'JOB_DETAIL', cardData: cardWithInput },
             }, { forefront: true });
         } else {
             await pushResult(cardWithInput);
         }
+    }
+    if (skippedDuplicates > 0) {
+        log.warning(`🟠 Skipped ${skippedDuplicates} duplicate jobs`);
     }
 
     await sleep(randomDelay(300, 800));
@@ -236,7 +244,11 @@ async function handleJobDetail(request, $, response) {
     }
 
     if (statusCode !== 200) {
-        log.debug(`⚠️ Status ${statusCode} on detail ${cardData.id}`);
+        if (statusCode === 999) {
+            log.warning(`⚠️ LinkedIn 999 (blocked) on job ${cardData.id}, pushing partial data`);
+        } else {
+            log.debug(`⚠️ Status ${statusCode} on detail ${cardData.id}`);
+        }
         await pushResult(cardData);
         return;
     }
@@ -253,8 +265,9 @@ async function handleJobDetail(request, $, response) {
                 Object.assign(merged, companyCache.get(slug));
                 await pushResult(merged);
             } else {
-                // Queue company page
-                const companyUrl = `https://www.linkedin.com/company/${slug}/about/`;
+                // Queue company page (preserve subdomain from card, e.g. ca.linkedin.com)
+                const companyOrigin = getLinkedInOrigin(cardData.companyLinkedinUrl);
+                const companyUrl = `${companyOrigin}/company/${slug}/about/`;
                 const wasAdded = await requestQueue.addRequest({
                     url: companyUrl,
                     uniqueKey: `company-${slug}`,
@@ -297,7 +310,11 @@ async function handleCompany(request, $, response) {
         companyCache.set(slug, companyData);
         log.debug(`🏢 Scraped company: ${slug}`);
     } else {
-        log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
+        if (statusCode === 999) {
+            log.warning(`⚠️ LinkedIn 999 (blocked) on company ${slug}`);
+        } else {
+            log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
+        }
         companyCache.set(slug, {}); // Cache empty to avoid retrying
     }
 

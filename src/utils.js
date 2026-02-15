@@ -86,6 +86,22 @@ export function normalizeUrl(url) {
 }
 
 /**
+ * Get origin (protocol + host) from a LinkedIn URL. Preserves regional subdomain (e.g. ca.linkedin.com).
+ * @param {string} url
+ * @returns {string} e.g. "https://www.linkedin.com" or "https://ca.linkedin.com"
+ */
+export function getLinkedInOrigin(url) {
+    if (!url) return 'https://www.linkedin.com';
+    try {
+        const parsed = new URL(normalizeUrl(url));
+        if (/\.linkedin\.com$/i.test(parsed.hostname)) {
+            return `${parsed.protocol}//${parsed.hostname}`;
+        }
+    } catch { /* ignore */ }
+    return 'https://www.linkedin.com';
+}
+
+/**
  * Extract the LinkedIn company slug from a company URL.
  * e.g. https://www.linkedin.com/company/facebook → "facebook"
  * @param {string} url
