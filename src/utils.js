@@ -49,13 +49,26 @@ export function extractTrackingParams(url) {
 
 /**
  * Format postedAt to YYYY-MM-DD.
- * @param {string|null} postedAt - ISO date or date string
+ * @param {string|number|Date|object|null} postedAt - ISO date, timestamp, or date string
  * @returns {string|null}
  */
 export function formatPostedAt(postedAt) {
-    if (!postedAt) return null;
-    const date = postedAt.split('T')[0];
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : postedAt;
+    if (postedAt == null || postedAt === '') return null;
+    let str;
+    if (typeof postedAt === 'string') {
+        str = postedAt;
+    } else if (postedAt instanceof Date) {
+        str = postedAt.toISOString();
+    } else if (typeof postedAt === 'number') {
+        str = new Date(postedAt).toISOString();
+    } else if (typeof postedAt === 'object' && postedAt !== null) {
+        str = postedAt.value ?? postedAt.date ?? postedAt['@value'] ?? JSON.stringify(postedAt);
+    } else {
+        str = String(postedAt);
+    }
+    if (typeof str !== 'string' || !str) return null;
+    const date = str.split('T')[0];
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : str;
 }
 
 /**
