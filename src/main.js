@@ -264,7 +264,7 @@ async function handleJobDetail(request, $, response) {
                 await pushResult(merged);
             } else {
                 // Queue company page (always use www to avoid regional blocks)
-                const companyUrl = `https://www.linkedin.com/company/${slug}/about/`;
+                const companyUrl = `https://www.linkedin.com/company/${slug}`;
                 const wasAdded = await requestQueue.addRequest({
                     url: companyUrl,
                     uniqueKey: `company-${slug}`,

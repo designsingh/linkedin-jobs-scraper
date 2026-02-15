@@ -226,8 +226,9 @@ export function parseJobDetail($) {
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Parse a public LinkedIn company page.
- * Returns description, website, employee count, slogan, address, etc.
+ * Parse a public LinkedIn company page (/company/{slug}).
+ * Extracts data from JSON-LD (@graph → Organization), DT/DD pairs,
+ * description paragraphs, and meta tags.
  *
  * @param {import('cheerio').CheerioAPI} $
  * @returns {Object}
@@ -235,99 +236,196 @@ export function parseJobDetail($) {
 export function parseCompanyPage($) {
     const company = {};
 
-    // Description
-    const descEl = $('section.core-section-container p.break-words').first() ||
-                   $('p.break-words').first();
-    company.companyDescription = descEl.text()?.trim() || null;
+    // ── 1. Try JSON-LD first (richest data source) ──
+    const jsonLd = extractJsonLdOrganization($);
 
-    // Slogan / tagline (competitor compatibility)
-    company.companySlogan = (
-        $('p.about-us__content').first().text() ||
-        $('section.core-section-container p').first().text() ||
-        ''
-    ).trim() || null;
+    if (jsonLd) {
+        company.companyDescription = jsonLd.description || null;
+        company.companySlogan = jsonLd.slogan || null;
+        company.companyWebsite = jsonLd.sameAs || null;
+        company.companyAddress = parseJsonLdAddress(jsonLd.address);
 
-    // Website
-    const websiteLink =
-        $('a[data-tracking-control-name="about_website"]').attr('href') ||
-        $('dd.mb4 a[rel="noopener noreferrer"]').first().attr('href') ||
-        '';
-    company.companyWebsite = websiteLink || null;
-
-    // Employee count from text like "10,001+ employees"
-    const staffText = $('a[data-tracking-control-name="about_employees"]').text() ||
-                      $('dd.mb4').filter((_, el) => /employees/i.test($(el).text())).text() ||
-                      '';
-    const staffMatch = staffText.match(/([\d,]+)/);
-    if (staffMatch) {
-        company.companyEmployeesCount = parseInt(staffMatch[1].replace(/,/g, ''), 10);
+        // numberOfEmployees can be { "@type": "QuantitativeValue", "value": 14183 }
+        if (jsonLd.numberOfEmployees) {
+            const empVal = typeof jsonLd.numberOfEmployees === 'object'
+                ? jsonLd.numberOfEmployees.value
+                : jsonLd.numberOfEmployees;
+            if (empVal) {
+                company.companyEmployeesCount = parseInt(String(empVal).replace(/,/g, ''), 10) || null;
+            }
+        }
     }
 
-    // Company address from JSON-LD or dt/dd
-    company.companyAddress = parseCompanyAddress($);
+    // ── 2. HTML description fallback (about-us section → p.break-words) ──
+    if (!company.companyDescription) {
+        const aboutSection = $('[data-test-id="about-us"]');
+        const descEl = aboutSection.length
+            ? aboutSection.find('p.break-words').first()
+            : ($('section.core-section-container p.break-words').first().length
+                ? $('section.core-section-container p.break-words').first()
+                : $('p.break-words').first());
+        const descText = descEl.text()?.trim();
+        if (descText && descText.length > 20) {
+            company.companyDescription = descText;
+        }
+    }
 
-    // Industry / specialties from dt/dd pairs
+    // ── 3. Website fallback from HTML ──
+    if (!company.companyWebsite) {
+        let websiteLink =
+            $('a[data-tracking-control-name="about_website"]').attr('href') ||
+            $('dd a[rel*="noopener"]').first().attr('href') ||
+            '';
+        // LinkedIn wraps website in a redirect URL — unwrap it
+        if (websiteLink) {
+            company.companyWebsite = unwrapLinkedInRedirect(websiteLink);
+        }
+    }
+
+    // ── 4. Employee count fallback from HTML ──
+    if (!company.companyEmployeesCount) {
+        const staffText =
+            $('a[data-tracking-control-name="about_employees"]').text() ||
+            $('dd').filter((_, el) => /employees/i.test($(el).text())).first().text() ||
+            '';
+        const staffMatch = staffText.match(/([\d,]+)/);
+        if (staffMatch) {
+            company.companyEmployeesCount = parseInt(staffMatch[1].replace(/,/g, ''), 10);
+        }
+    }
+
+    // ── 5. DT/DD pairs (industry, specialties, type, founded, headquarters) ──
     $('dt').each((_, dtEl) => {
         const label = $(dtEl).text().trim().toLowerCase();
-        const value = $(dtEl).next('dd').text().trim();
-        if (!value) return;
-        if (label.includes('industr')) company.companyIndustry = value;
-        if (label.includes('specialt')) company.companySpecialties = value;
-        if (label.includes('type')) company.companyType = value;
-        if (label.includes('founded')) company.companyFounded = value;
-        if (label.includes('headquarters')) company.companyHeadquarters = value;
+        const $dd = $(dtEl).next('dd');
+        const value = $dd.text().trim().replace(/\s+/g, ' ');
+        if (!value || value.length > 300) return;
+
+        if (label.includes('industr') && !company.companyIndustry) {
+            company.companyIndustry = value;
+        } else if (label.includes('specialt') && !company.companySpecialties) {
+            company.companySpecialties = value;
+        } else if (label.includes('type') && !company.companyType) {
+            company.companyType = value;
+        } else if (label.includes('founded') && !company.companyFounded) {
+            company.companyFounded = value;
+        } else if (label.includes('headquarters') && !company.companyHeadquarters) {
+            company.companyHeadquarters = value;
+        } else if (label.includes('company size') && !company.companyEmployeesCount) {
+            const m = value.match(/([\d,]+)/);
+            if (m) company.companyEmployeesCount = parseInt(m[1].replace(/,/g, ''), 10);
+        }
     });
 
-    return company;
-}
-
-/**
- * Parse company address into PostalAddress structure (competitor compatibility).
- * @param {import('cheerio').CheerioAPI} $
- * @returns {Object|null}
- */
-function parseCompanyAddress($) {
-    // Try JSON-LD first
-    const scripts = $('script[type="application/ld+json"]');
-    for (let i = 0; i < scripts.length; i++) {
-        try {
-            const json = JSON.parse($(scripts[i]).html() || '{}');
-            const org = Array.isArray(json) ? json.find((o) => o['@type'] === 'Organization') : (json['@type'] === 'Organization' ? json : null);
-            if (org?.address) {
-                const addr = org.address;
-                if (addr['@type'] === 'PostalAddress' || addr.streetAddress || addr.addressLocality) {
-                    const country = addr.addressCountry;
-                    const countryStr = typeof country === 'string'
-                        ? country
-                        : (country?.name ?? country?.['@id'] ?? null);
-                    return {
-                        type: 'PostalAddress',
-                        streetAddress: addr.streetAddress || null,
-                        addressLocality: addr.addressLocality || null,
-                        addressRegion: addr.addressRegion || null,
-                        postalCode: addr.postalCode || null,
-                        addressCountry: countryStr || null,
-                    };
-                }
-            }
-        } catch { /* ignore */ }
-    }
-
-    // Fallback: parse from headquarters dd
-    const hqText = $('dd').filter((_, el) => /headquarters/i.test($(el).prev('dt').text())).first().text().trim();
-    if (hqText) {
-        const parts = hqText.split(/,\s*/);
-        return {
+    // ── 6. Company address fallback from DT/DD headquarters ──
+    if (!company.companyAddress && company.companyHeadquarters) {
+        const parts = company.companyHeadquarters.split(/,\s*/);
+        company.companyAddress = {
             type: 'PostalAddress',
-            streetAddress: parts[0] || null,
-            addressLocality: parts[1] || null,
-            addressRegion: parts[2] || null,
+            streetAddress: null,
+            addressLocality: parts[0] || null,
+            addressRegion: parts[1] || null,
             postalCode: null,
             addressCountry: parts[parts.length - 1] || null,
         };
     }
 
+    // ── 7. Slogan fallback from HTML ──
+    if (!company.companySlogan) {
+        company.companySlogan = (
+            $('p.top-card-layout__headline, [class*="org-top-card-summary__tagline"]').first().text() ||
+            ''
+        ).trim() || null;
+    }
+
+    // ── 8. Meta description fallback ──
+    if (!company.companyDescription) {
+        const metaDesc = $('meta[name="description"]').attr('content') || '';
+        // Meta format: "Company | X followers on LinkedIn. Tagline | Description..."
+        const pipeMatch = metaDesc.match(/\|\s*(.+)/);
+        if (pipeMatch) {
+            const afterPipe = pipeMatch[1].trim();
+            // Skip if it's just the tagline repeated
+            if (afterPipe.length > 50) {
+                company.companyDescription = afterPipe;
+            }
+        }
+    }
+
+    return company;
+}
+
+/**
+ * Extract the Organization object from JSON-LD on the page.
+ * LinkedIn company pages use @graph with multiple entries.
+ *
+ * @param {import('cheerio').CheerioAPI} $
+ * @returns {Object|null}
+ */
+function extractJsonLdOrganization($) {
+    const scripts = $('script[type="application/ld+json"]');
+    for (let i = 0; i < scripts.length; i++) {
+        try {
+            const json = JSON.parse($(scripts[i]).html() || '{}');
+
+            // Check @graph array (LinkedIn company pages use this structure)
+            if (json['@graph'] && Array.isArray(json['@graph'])) {
+                const org = json['@graph'].find((o) => o['@type'] === 'Organization');
+                if (org) return org;
+            }
+
+            // Check root-level Organization
+            if (json['@type'] === 'Organization') return json;
+
+            // Check array of objects
+            if (Array.isArray(json)) {
+                const org = json.find((o) => o['@type'] === 'Organization');
+                if (org) return org;
+            }
+        } catch { /* ignore malformed JSON-LD */ }
+    }
     return null;
+}
+
+/**
+ * Parse a JSON-LD address object into our PostalAddress structure.
+ * @param {Object} addr
+ * @returns {Object|null}
+ */
+function parseJsonLdAddress(addr) {
+    if (!addr) return null;
+    if (!addr.streetAddress && !addr.addressLocality && !addr.addressRegion) return null;
+
+    const country = addr.addressCountry;
+    const countryStr = typeof country === 'string'
+        ? country
+        : (country?.name ?? country?.['@id'] ?? null);
+
+    return {
+        type: 'PostalAddress',
+        streetAddress: addr.streetAddress || null,
+        addressLocality: addr.addressLocality || null,
+        addressRegion: addr.addressRegion || null,
+        postalCode: addr.postalCode || null,
+        addressCountry: countryStr || null,
+    };
+}
+
+/**
+ * Unwrap a LinkedIn redirect URL like:
+ * https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fstripe.com&urlhash=...
+ * @param {string} url
+ * @returns {string}
+ */
+function unwrapLinkedInRedirect(url) {
+    if (!url) return '';
+    try {
+        if (url.includes('/redir/redirect')) {
+            const parsed = new URL(url.replace(/&amp;/g, '&'));
+            return parsed.searchParams.get('url') || url;
+        }
+    } catch { /* ignore */ }
+    return url;
 }
 
 /**
