@@ -36,7 +36,20 @@ if (!hasStartUrls && !hasKeywords) {
 }
 
 // ── Proxy ────────────────────────────────────────────────────
-const proxyConfiguration = await Actor.createProxyConfiguration(proxy);
+// Use no proxy for JOB_DETAIL and COMPANY so LinkedIn returns full HTML (not minimal/blocked).
+const baseProxyConfiguration = await Actor.createProxyConfiguration(proxy);
+const proxyConfiguration = baseProxyConfiguration ? {
+    get isManInTheMiddle() {
+        return baseProxyConfiguration.isManInTheMiddle ?? false;
+    },
+    async newProxyInfo(sessionId, options = {}) {
+        const request = options.request;
+        if (request?.userData?.type === 'JOB_DETAIL' || request?.userData?.type === 'COMPANY') {
+            return undefined;
+        }
+        return baseProxyConfiguration.newProxyInfo(sessionId, options);
+    },
+} : undefined;
 
 // ── State ────────────────────────────────────────────────────
 const scrapedIds = new Set();
@@ -137,17 +150,6 @@ const crawler = new CheerioCrawler({
     maxConcurrency: 5,
     maxRequestRetries: 3,
     requestHandlerTimeoutSecs: 60,
-
-    // Job detail and company pages often return empty/minimal HTML when using proxy.
-    // Bypass proxy for those requests so LinkedIn returns full content.
-    preNavigationHooks: [
-        ({ request }, gotOptions) => {
-            const type = request.userData?.type;
-            if (type === 'JOB_DETAIL' || type === 'COMPANY') {
-                gotOptions.proxyUrl = undefined;
-            }
-        },
-    ],
 
     async requestHandler({ request, $, response }) {
         const { type } = request.userData;
