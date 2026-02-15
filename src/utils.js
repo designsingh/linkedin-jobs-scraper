@@ -30,6 +30,35 @@ export function extractJobId(url) {
 }
 
 /**
+ * Extract trackingId and refId from a LinkedIn job URL.
+ * @param {string} url
+ * @returns {{ trackingId: string|null, refId: string|null }}
+ */
+export function extractTrackingParams(url) {
+    if (!url) return { trackingId: null, refId: null };
+    try {
+        const parsed = new URL(url, 'https://www.linkedin.com');
+        return {
+            trackingId: parsed.searchParams.get('trackingId') || null,
+            refId: parsed.searchParams.get('refId') || null,
+        };
+    } catch {
+        return { trackingId: null, refId: null };
+    }
+}
+
+/**
+ * Format postedAt to YYYY-MM-DD.
+ * @param {string|null} postedAt - ISO date or date string
+ * @returns {string|null}
+ */
+export function formatPostedAt(postedAt) {
+    if (!postedAt) return null;
+    const date = postedAt.split('T')[0];
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : postedAt;
+}
+
+/**
  * Normalize a relative or protocol-relative LinkedIn URL.
  * @param {string} url
  * @returns {string}
@@ -53,6 +82,22 @@ export function extractCompanySlug(url) {
     if (!url) return null;
     const match = url.match(/linkedin\.com\/company\/([^/?#]+)/);
     return match ? match[1] : null;
+}
+
+/**
+ * Build a human-readable LinkedIn jobs search URL (for inputUrl in output).
+ * @param {string} keywords
+ * @param {string} location
+ * @param {Object} extraParams - e.g. { f_TPR: 'r604800' }
+ * @returns {string}
+ */
+export function buildHumanSearchUrl(keywords, location, extraParams = {}) {
+    const params = new URLSearchParams({
+        keywords: keywords || '',
+        location: location || '',
+        ...extraParams,
+    });
+    return `https://www.linkedin.com/jobs/search/?${params.toString()}`;
 }
 
 /**

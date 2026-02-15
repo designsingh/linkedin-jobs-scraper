@@ -4,8 +4,8 @@ import { COUNTRY_CITIES } from './constants.js';
 import { parseJobCards, parseJobDetail, parseCompanyPage, isLoginWall } from './parsers.js';
 import {
     sleep, randomDelay, extractJobId, normalizeUrl,
-    extractCompanySlug, buildSearchUrl, toGuestApiUrl,
-    getStartParam, setStartParam,
+    extractCompanySlug, buildSearchUrl, buildHumanSearchUrl, toGuestApiUrl,
+    getStartParam, setStartParam, formatPostedAt,
 } from './utils.js';
 
 // ────────────────────────────────────────────────────────────────
@@ -47,17 +47,20 @@ const pendingCompanies = new Map();   // slug → [resolve callbacks]
 // ── Request Queue ────────────────────────────────────────────
 const requestQueue = await RequestQueue.open();
 
+/** Human-readable search URL for output (competitor compatibility) */
+let inputUrl = '';
+
 /**
  * Enqueue all paginated search URLs for a single base URL.
  */
-async function enqueueSearchPages(baseApiUrl, label = '') {
+async function enqueueSearchPages(baseApiUrl, label = '', searchInputUrl = '') {
     const pagesNeeded = Math.ceil(maxItems / 25);
     for (let page = 0; page < pagesNeeded; page++) {
         const url = setStartParam(baseApiUrl, page * 25);
         await requestQueue.addRequest({
             url,
             uniqueKey: url,
-            userData: { type: 'SEARCH', label },
+            userData: { type: 'SEARCH', label, inputUrl: searchInputUrl },
         });
     }
 }
@@ -68,6 +71,7 @@ if (hasStartUrls) {
         const rawUrl = typeof entry === 'string' ? entry : entry.url;
         if (!rawUrl) continue;
 
+        inputUrl = rawUrl;
         const apiUrl = toGuestApiUrl(rawUrl);
 
         if (splitSearchByLocation && targetCountry && COUNTRY_CITIES[targetCountry]) {
@@ -86,16 +90,17 @@ if (hasStartUrls) {
             log.info(`🌍 Splitting search into ${cities.length} city-level searches for "${targetCountry}"`);
             for (const city of cities) {
                 const cityUrl = buildSearchUrl(keywords, city, 0, extraParams);
-                await enqueueSearchPages(cityUrl, city);
+                const humanUrl = buildHumanSearchUrl(keywords, city, datePosted ? { f_TPR: datePosted } : {});
+                await enqueueSearchPages(cityUrl, city, humanUrl);
             }
         } else {
             // Apply optional datePosted override
             if (datePosted) {
                 const parsed = new URL(apiUrl);
                 parsed.searchParams.set('f_TPR', datePosted);
-                await enqueueSearchPages(parsed.toString());
+                await enqueueSearchPages(parsed.toString(), '', rawUrl);
             } else {
-                await enqueueSearchPages(apiUrl);
+                await enqueueSearchPages(apiUrl, '', rawUrl);
             }
         }
     }
@@ -104,17 +109,19 @@ if (hasStartUrls) {
     for (const keyword of searchKeywords) {
         const extraParams = {};
         if (datePosted) extraParams.f_TPR = datePosted;
+        inputUrl = buildHumanSearchUrl(keyword, searchLocation, datePosted ? { f_TPR: datePosted } : {});
 
         if (splitSearchByLocation && targetCountry && COUNTRY_CITIES[targetCountry]) {
             const cities = COUNTRY_CITIES[targetCountry];
             log.info(`🌍 Splitting "${keyword}" across ${cities.length} cities in ${targetCountry}`);
             for (const city of cities) {
                 const url = buildSearchUrl(keyword, city, 0, extraParams);
-                await enqueueSearchPages(url, `${keyword} - ${city}`);
+                const humanUrl = buildHumanSearchUrl(keyword, city, extraParams);
+                await enqueueSearchPages(url, `${keyword} - ${city}`, humanUrl);
             }
         } else {
             const url = buildSearchUrl(keyword, searchLocation, 0, extraParams);
-            await enqueueSearchPages(url, keyword);
+            await enqueueSearchPages(url, keyword, inputUrl);
         }
     }
 }
@@ -180,19 +187,23 @@ async function handleSearch(request, $, response) {
     const label = request.userData.label || '';
     log.info(`📄 Found ${cards.length} jobs ${label ? `(${label}) ` : ''}at offset ${getStartParam(request.url)}`);
 
+    const searchInputUrl = request.userData.inputUrl || inputUrl || '';
+
     for (const card of cards) {
         if (totalScraped >= maxItems) break;
         if (scrapedIds.has(card.id)) continue;
         scrapedIds.add(card.id);
 
+        const cardWithInput = { ...card, inputUrl: searchInputUrl };
+
         if (scrapeJobDetails) {
             await requestQueue.addRequest({
                 url: `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${card.id}`,
                 uniqueKey: `detail-${card.id}`,
-                userData: { type: 'JOB_DETAIL', cardData: card },
+                userData: { type: 'JOB_DETAIL', cardData: cardWithInput },
             }, { forefront: true });
         } else {
-            await pushResult(card);
+            await pushResult(cardWithInput);
         }
     }
 
@@ -293,8 +304,14 @@ async function handleCompany(request, $, response) {
 async function pushResult(data) {
     if (totalScraped >= maxItems) return;
 
+    const salaryStr = data.salary ?? (Array.isArray(data.salaryInfo) && data.salaryInfo.length
+        ? data.salaryInfo.filter(Boolean).join(' – ')
+        : '');
+
     await Actor.pushData({
         id: data.id || null,
+        trackingId: data.trackingId ?? null,
+        refId: data.refId ?? null,
         link: data.link || null,
         title: data.title || null,
         companyName: data.companyName || null,
@@ -302,12 +319,13 @@ async function pushResult(data) {
         companyLogo: data.companyLogo || null,
         location: data.location || null,
         salaryInfo: data.salaryInfo || [],
-        postedAt: data.postedAt || null,
+        salary: salaryStr || '',
+        postedAt: formatPostedAt(data.postedAt) || data.postedAt || null,
         benefits: data.benefits || [],
         descriptionHtml: data.descriptionHtml || null,
         descriptionText: data.descriptionText || null,
         applicantsCount: data.applicantsCount || null,
-        applyUrl: data.applyUrl || null,
+        applyUrl: data.applyUrl ?? '',
         jobPosterName: data.jobPosterName || null,
         jobPosterTitle: data.jobPosterTitle || null,
         jobPosterPhoto: data.jobPosterPhoto || null,
@@ -316,14 +334,17 @@ async function pushResult(data) {
         employmentType: data.employmentType || null,
         jobFunction: data.jobFunction || null,
         industries: data.industries || null,
+        inputUrl: data.inputUrl || inputUrl || null,
         companyDescription: data.companyDescription || null,
         companyWebsite: data.companyWebsite || null,
-        companyEmployeesCount: data.companyEmployeesCount || null,
+        companyEmployeesCount: data.companyEmployeesCount ?? null,
         companyIndustry: data.companyIndustry || null,
         companySpecialties: data.companySpecialties || null,
         companyType: data.companyType || null,
         companyFounded: data.companyFounded || null,
         companyHeadquarters: data.companyHeadquarters || null,
+        companySlogan: data.companySlogan || null,
+        companyAddress: data.companyAddress || null,
     });
 
     totalScraped++;

@@ -1,5 +1,5 @@
 import { log } from 'apify';
-import { extractJobId, normalizeUrl } from './utils.js';
+import { extractJobId, extractTrackingParams, normalizeUrl } from './utils.js';
 
 // ────────────────────────────────────────────────────────────────
 // 1) SEARCH RESULTS PAGE (list of job cards)
@@ -19,14 +19,15 @@ export function parseJobCards($) {
         try {
             const $card = $(el);
 
-            // Job link & ID
+            // Job link & ID (preserve full URL with tracking params for competitor compatibility)
             const rawLink =
                 $card.find('a.base-card__full-link').attr('href') ||
                 $card.find('a[data-tracking-control-name*="search-card"]').attr('href') ||
                 $card.find('a').first().attr('href') ||
                 '';
-            const link = normalizeUrl(rawLink.split('?')[0]);
+            const link = normalizeUrl(rawLink);
             const id = extractJobId(rawLink);
+            const { trackingId, refId } = extractTrackingParams(rawLink);
             if (!id) return;
 
             // Title
@@ -86,6 +87,8 @@ export function parseJobCards($) {
             if (title || companyName) {
                 jobs.push({
                     id,
+                    trackingId,
+                    refId,
                     link,
                     title: title || 'N/A',
                     companyName: companyName || 'N/A',
@@ -164,6 +167,12 @@ export function parseJobDetail($) {
         '';
     detail.applyUrl = applyLink ? normalizeUrl(applyLink) : '';
 
+    // ── Salary (string, for competitor compatibility) ──
+    const salaryText = $('span.compensation__salary').text()?.trim() ||
+        $('div.compensation__range').text()?.trim() ||
+        '';
+    detail.salary = salaryText || '';
+
     // ── Job poster info ──
     const posterCard = $('div.message-the-recruiter, div.base-main-card');
     if (posterCard.length) {
@@ -197,7 +206,7 @@ export function parseJobDetail($) {
 
 /**
  * Parse a public LinkedIn company page.
- * Returns description, website, employee count, etc.
+ * Returns description, website, employee count, slogan, address, etc.
  *
  * @param {import('cheerio').CheerioAPI} $
  * @returns {Object}
@@ -209,6 +218,13 @@ export function parseCompanyPage($) {
     const descEl = $('section.core-section-container p.break-words').first() ||
                    $('p.break-words').first();
     company.companyDescription = descEl.text()?.trim() || null;
+
+    // Slogan / tagline (competitor compatibility)
+    company.companySlogan = (
+        $('p.about-us__content').first().text() ||
+        $('section.core-section-container p').first().text() ||
+        ''
+    ).trim() || null;
 
     // Website
     const websiteLink =
@@ -226,6 +242,9 @@ export function parseCompanyPage($) {
         company.companyEmployeesCount = parseInt(staffMatch[1].replace(/,/g, ''), 10);
     }
 
+    // Company address from JSON-LD or dt/dd
+    company.companyAddress = parseCompanyAddress($);
+
     // Industry / specialties from dt/dd pairs
     $('dt').each((_, dtEl) => {
         const label = $(dtEl).text().trim().toLowerCase();
@@ -239,6 +258,55 @@ export function parseCompanyPage($) {
     });
 
     return company;
+}
+
+/**
+ * Parse company address into PostalAddress structure (competitor compatibility).
+ * @param {import('cheerio').CheerioAPI} $
+ * @returns {Object|null}
+ */
+function parseCompanyAddress($) {
+    // Try JSON-LD first
+    const scripts = $('script[type="application/ld+json"]');
+    for (let i = 0; i < scripts.length; i++) {
+        try {
+            const json = JSON.parse($(scripts[i]).html() || '{}');
+            const org = Array.isArray(json) ? json.find((o) => o['@type'] === 'Organization') : (json['@type'] === 'Organization' ? json : null);
+            if (org?.address) {
+                const addr = org.address;
+                if (addr['@type'] === 'PostalAddress' || addr.streetAddress || addr.addressLocality) {
+                    const country = addr.addressCountry;
+                    const countryStr = typeof country === 'string'
+                        ? country
+                        : (country?.name ?? country?.['@id'] ?? null);
+                    return {
+                        type: 'PostalAddress',
+                        streetAddress: addr.streetAddress || null,
+                        addressLocality: addr.addressLocality || null,
+                        addressRegion: addr.addressRegion || null,
+                        postalCode: addr.postalCode || null,
+                        addressCountry: countryStr || null,
+                    };
+                }
+            }
+        } catch { /* ignore */ }
+    }
+
+    // Fallback: parse from headquarters dd
+    const hqText = $('dd').filter((_, el) => /headquarters/i.test($(el).prev('dt').text())).first().text().trim();
+    if (hqText) {
+        const parts = hqText.split(/,\s*/);
+        return {
+            type: 'PostalAddress',
+            streetAddress: parts[0] || null,
+            addressLocality: parts[1] || null,
+            addressRegion: parts[2] || null,
+            postalCode: null,
+            addressCountry: parts[parts.length - 1] || null,
+        };
+    }
+
+    return null;
 }
 
 /**
