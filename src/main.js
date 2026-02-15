@@ -144,6 +144,27 @@ const crawler = new CheerioCrawler({
     // Tell Crawlee not to auto-throw on 429 — we handle it ourselves with backoff
     ignoreHttpErrorStatusCodes: [429, 999],
 
+    // Add browser-like headers so LinkedIn doesn't detect CheerioCrawler as a bot
+    preNavigationHooks: [
+        async (crawlingContext, gotOptions) => {
+            gotOptions.headers = {
+                ...gotOptions.headers,
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'no-cache',
+                'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+            };
+        },
+    ],
+
     async requestHandler({ request, $, response }) {
         const { type } = request.userData;
 
@@ -162,6 +183,16 @@ const crawler = new CheerioCrawler({
         // If it was a job detail, push partial data
         if (request.userData.type === 'JOB_DETAIL' && request.userData.cardData) {
             await pushResult(request.userData.cardData);
+        }
+
+        // If it was a company page, push pending jobs without company data
+        if (request.userData.type === 'COMPANY') {
+            const { slug, pendingJobs = [] } = request.userData;
+            log.warning(`⚠️ Company ${slug} failed permanently, pushing ${pendingJobs.length} jobs without company data`);
+            companyCache.set(slug, {});
+            for (const job of pendingJobs) {
+                await pushResult(job);
+            }
         }
     },
 });
@@ -299,19 +330,22 @@ async function handleJobDetail(request, $, response) {
 async function handleCompany(request, $, response) {
     const { slug, pendingJobs = [] } = request.userData;
     const statusCode = response?.statusCode;
+    const htmlLength = $.html()?.length || 0;
 
     let companyData = {};
 
     if (statusCode === 999 || statusCode === 429) {
         // LinkedIn blocks company pages aggressively — don't retry, just push without company data
-        log.debug(`⚠️ Company ${slug} blocked (${statusCode}), skipping`);
+        log.info(`⚠️ Company ${slug} blocked (${statusCode}), html=${htmlLength}`);
         companyCache.set(slug, {});
     } else if (statusCode === 200 && !isLoginWall($, statusCode)) {
         companyData = parseCompanyPage($);
+        const fieldCount = Object.values(companyData).filter(v => v != null).length;
+        log.info(`🏢 Company ${slug}: ${fieldCount} fields (status=${statusCode}, html=${htmlLength})`);
         companyCache.set(slug, companyData);
-        log.debug(`🏢 Scraped company: ${slug}`);
     } else {
-        log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
+        const loginWall = isLoginWall($, statusCode);
+        log.info(`⚠️ Company ${slug}: status=${statusCode}, html=${htmlLength}, loginWall=${loginWall}`);
         companyCache.set(slug, {});
     }
 
