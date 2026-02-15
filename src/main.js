@@ -190,7 +190,7 @@ async function handleSearch(request, $, response) {
                 url: `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${card.id}`,
                 uniqueKey: `detail-${card.id}`,
                 userData: { type: 'JOB_DETAIL', cardData: card },
-            });
+            }, { forefront: true });
         } else {
             await pushResult(card);
         }
