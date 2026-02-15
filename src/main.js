@@ -138,6 +138,17 @@ const crawler = new CheerioCrawler({
     maxRequestRetries: 3,
     requestHandlerTimeoutSecs: 60,
 
+    // Job detail and company pages often return empty/minimal HTML when using proxy.
+    // Bypass proxy for those requests so LinkedIn returns full content.
+    preNavigationHooks: [
+        ({ request }, gotOptions) => {
+            const type = request.userData?.type;
+            if (type === 'JOB_DETAIL' || type === 'COMPANY') {
+                gotOptions.proxyUrl = undefined;
+            }
+        },
+    ],
+
     async requestHandler({ request, $, response }) {
         const { type } = request.userData;
 
