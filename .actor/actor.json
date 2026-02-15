@@ -1,0 +1,48 @@
+{
+  "actorSpecification": 1,
+  "name": "linkedin-jobs-scraper",
+  "title": "LinkedIn Jobs Scraper - PPR",
+  "description": "Scrape jobs from LinkedIn jobs search results along with company details. Get key information to find contact info.",
+  "version": "1.0",
+  "buildTag": "latest",
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "LinkedIn Jobs",
+      "views": {
+        "overview": {
+          "title": "Overview",
+          "transformation": {
+            "fields": [
+              "id",
+              "title",
+              "companyName",
+              "location",
+              "postedAt",
+              "employmentType",
+              "seniorityLevel",
+              "salaryInfo",
+              "link"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "id": { "label": "Job ID", "format": "text" },
+              "title": { "label": "Title", "format": "text" },
+              "companyName": { "label": "Company", "format": "text" },
+              "location": { "label": "Location", "format": "text" },
+              "postedAt": { "label": "Posted", "format": "text" },
+              "employmentType": { "label": "Type", "format": "text" },
+              "seniorityLevel": { "label": "Level", "format": "text" },
+              "salaryInfo": { "label": "Salary", "format": "text" },
+              "link": { "label": "URL", "format": "link" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

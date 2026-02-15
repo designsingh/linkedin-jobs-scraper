@@ -1,0 +1,85 @@
+{
+  "title": "LinkedIn Jobs Scraper Input",
+  "description": "Provide LinkedIn job search URLs or keywords to scrape job listings along with company details.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrls": {
+      "title": "LinkedIn Search URLs",
+      "type": "array",
+      "description": "Go to LinkedIn jobs search page (https://www.linkedin.com/jobs/search/), apply your filters, copy the full URL from the address bar and paste here. You can add multiple URLs.",
+      "editor": "requestListSources",
+      "prefill": [
+        { "url": "https://www.linkedin.com/jobs/search/?keywords=software%20engineer&location=United%20States" }
+      ]
+    },
+    "searchKeywords": {
+      "title": "Search Keywords (Alternative)",
+      "type": "array",
+      "description": "Alternative to Start URLs: provide keywords to search (e.g., 'software engineer', 'data scientist'). Will be used only if no Start URLs are provided.",
+      "editor": "stringList"
+    },
+    "searchLocation": {
+      "title": "Search Location (Alternative)",
+      "type": "string",
+      "description": "Location for keyword search (e.g., 'United States', 'London'). Used with Search Keywords.",
+      "editor": "textfield"
+    },
+    "maxItems": {
+      "title": "Max Items",
+      "type": "integer",
+      "description": "Maximum number of job listings to scrape. LinkedIn limits search results to ~1000 per query. Use 'Split search by location' to get more.",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 10000,
+      "prefill": 200
+    },
+    "scrapeCompany": {
+      "title": "Scrape Company Details",
+      "type": "boolean",
+      "description": "Scrape additional company information (description, website, employee count). This makes the scraper slower but provides richer data.",
+      "default": true
+    },
+    "scrapeJobDetails": {
+      "title": "Scrape Full Job Details",
+      "type": "boolean",
+      "description": "Fetch full job description, poster info, and application details for each listing. Disabling this only returns card-level data but is much faster.",
+      "default": true
+    },
+    "splitSearchByLocation": {
+      "title": "Split Search URLs by Location",
+      "type": "boolean",
+      "description": "LinkedIn limits results to ~1000 jobs per search. Enable this to automatically split your search into multiple city-level searches within the target country to get more results. Ignores duplicate jobs automatically.",
+      "default": false
+    },
+    "targetCountry": {
+      "title": "Target Country (for Split Search)",
+      "type": "string",
+      "description": "Country to split searches by city. Required when 'Split search by location' is enabled.",
+      "editor": "select",
+      "default": "",
+      "enum": ["", "usa", "uk", "canada", "india", "germany", "france", "australia", "netherlands", "spain", "italy", "brazil", "singapore", "japan", "uae"],
+      "enumTitles": ["Select country...", "United States", "United Kingdom", "Canada", "India", "Germany", "France", "Australia", "Netherlands", "Spain", "Italy", "Brazil", "Singapore", "Japan", "UAE"]
+    },
+    "datePosted": {
+      "title": "Date Posted Filter",
+      "type": "string",
+      "description": "On LinkedIn jobs search page, select the Date filter and copy the search URL. Or use this to override.",
+      "editor": "select",
+      "default": "",
+      "enum": ["", "r86400", "r604800", "r2592000"],
+      "enumTitles": ["Any time (from URL)", "Past 24 hours", "Past week", "Past month"]
+    },
+    "proxy": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings. Residential proxies recommended for best results.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+      }
+    }
+  },
+  "required": []
+}

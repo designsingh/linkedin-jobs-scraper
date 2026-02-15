@@ -1,0 +1,21 @@
+{
+  "name": "linkedin-jobs-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scrape jobs from LinkedIn jobs search results along with company details. Get key information to find contact info.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "author": "DesignX",
+  "license": "ISC",
+  "dependencies": {
+    "apify": "^3.1.0",
+    "crawlee": "^3.5.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
