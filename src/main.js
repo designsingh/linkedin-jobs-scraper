@@ -165,7 +165,7 @@ const crawler = new CheerioCrawler({
         },
     ],
 
-    async requestHandler({ request, $, response }) {
+    async requestHandler({ request, $, response, session }) {
         const { type } = request.userData;
 
         if (type === 'SEARCH') {
@@ -173,7 +173,7 @@ const crawler = new CheerioCrawler({
         } else if (type === 'JOB_DETAIL') {
             await handleJobDetail(request, $, response);
         } else if (type === 'COMPANY') {
-            await handleCompany(request, $, response);
+            await handleCompany(request, $, response, session);
         }
     },
 
@@ -327,16 +327,25 @@ async function handleJobDetail(request, $, response) {
     await sleep(randomDelay(200, 600));
 }
 
-async function handleCompany(request, $, response) {
+async function handleCompany(request, $, response, session) {
     const { slug, pendingJobs = [] } = request.userData;
     const statusCode = response?.statusCode;
     const htmlLength = $.html()?.length || 0;
+    const retryCount = request.retryCount || 0;
 
     let companyData = {};
 
     if (statusCode === 999 || statusCode === 429) {
-        // LinkedIn blocks company pages aggressively — don't retry, just push without company data
-        log.info(`⚠️ Company ${slug} blocked (${statusCode}), html=${htmlLength}`);
+        if (retryCount < 4) {
+            // Retire this session (bad proxy IP) so Crawlee picks a fresh one
+            if (session) session.retire();
+            const backoff = retryCount * 2000 + randomDelay(1000, 3000);
+            log.info(`⚠️ Company ${slug} blocked (${statusCode}), retry ${retryCount + 1}/5 in ${Math.round(backoff / 1000)}s`);
+            await sleep(backoff);
+            throw new Error(`Company ${slug} blocked (${statusCode})`);
+        }
+        // Exhausted retries — give up gracefully
+        log.info(`⚠️ Company ${slug} blocked after ${retryCount} retries, skipping`);
         companyCache.set(slug, {});
     } else if (statusCode === 200 && !isLoginWall($, statusCode)) {
         companyData = parseCompanyPage($);
@@ -345,6 +354,11 @@ async function handleCompany(request, $, response) {
         companyCache.set(slug, companyData);
     } else {
         const loginWall = isLoginWall($, statusCode);
+        if (loginWall && retryCount < 4) {
+            if (session) session.retire();
+            log.info(`⚠️ Company ${slug} login wall (status=${statusCode}), retry ${retryCount + 1}/5`);
+            throw new Error(`Company ${slug} login wall`);
+        }
         log.info(`⚠️ Company ${slug}: status=${statusCode}, html=${htmlLength}, loginWall=${loginWall}`);
         companyCache.set(slug, {});
     }
