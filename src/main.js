@@ -188,11 +188,14 @@ const crawler = new CheerioCrawler({
         // If it was a company page, push pending jobs without company data
         if (request.userData.type === 'COMPANY') {
             const { slug, pendingJobs = [] } = request.userData;
-            log.warning(`⚠️ Company ${slug} failed permanently, pushing ${pendingJobs.length} jobs without company data`);
+            const overflow = pendingCompanies.get(slug) || [];
+            const totalPending = pendingJobs.length + overflow.length;
+            log.warning(`⚠️ Company ${slug} failed permanently, pushing ${totalPending} jobs without company data`);
             companyCache.set(slug, {});
-            for (const job of pendingJobs) {
+            for (const job of [...pendingJobs, ...overflow]) {
                 await pushResult(job);
             }
+            pendingCompanies.delete(slug);
         }
     },
 });
@@ -306,15 +309,22 @@ async function handleJobDetail(request, $, response) {
                     },
                 }, { forefront: false });
 
-                // If request already existed, push with what we have
                 if (!wasAdded.wasAlreadyPresent) {
-                    // Will be pushed after company is scraped
+                    // First job for this company — will be pushed after company is scraped
+                    // Also init the overflow list for any additional jobs with same company
+                    pendingCompanies.set(slug, []);
                 } else {
-                    // Company already queued or done — check cache again
+                    // Company already queued — check if it's done
                     if (companyCache.has(slug)) {
                         Object.assign(merged, companyCache.get(slug));
+                        await pushResult(merged);
+                    } else {
+                        // Still being scraped — park this job until company finishes
+                        if (!pendingCompanies.has(slug)) {
+                            pendingCompanies.set(slug, []);
+                        }
+                        pendingCompanies.get(slug).push(merged);
                     }
-                    await pushResult(merged);
                 }
             }
         } else {
@@ -364,10 +374,18 @@ async function handleCompany(request, $, response, session) {
     }
 
     // Push all pending jobs that were waiting on this company
+    // 1) Jobs stored in the request's userData (first job that triggered the queue)
     for (const job of pendingJobs) {
         Object.assign(job, companyData);
         await pushResult(job);
     }
+    // 2) Overflow jobs added while the company page was being retried
+    const overflow = pendingCompanies.get(slug) || [];
+    for (const job of overflow) {
+        Object.assign(job, companyData);
+        await pushResult(job);
+    }
+    pendingCompanies.delete(slug);
 
     await sleep(randomDelay(300, 700));
 }
