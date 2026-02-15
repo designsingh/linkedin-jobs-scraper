@@ -233,9 +233,19 @@ async function handleJobDetail(request, $, response) {
 
     const { cardData } = request.userData;
     const statusCode = response?.statusCode;
+    const htmlLength = $.html()?.length || 0;
+
+    // Debug: log response info for first few jobs so we can diagnose empty descriptions
+    if (totalScraped < 5) {
+        const hasDesc = $('div.show-more-less-html__markup').length > 0;
+        const hasDescAlt = $('div.description__text').length > 0;
+        const hasCriteria = $('li.description__job-criteria-item').length;
+        const titleText = $('h2').first().text().trim().slice(0, 50);
+        log.info(`🔍 DEBUG job ${cardData.id}: status=${statusCode}, htmlLen=${htmlLength}, hasDesc=${hasDesc}, hasDescAlt=${hasDescAlt}, criteria=${hasCriteria}, title="${titleText}", url=${request.url}`);
+    }
 
     if (isLoginWall($, statusCode)) {
-        log.debug(`🔒 Login wall on job ${cardData.id}`);
+        log.warning(`🔒 Login wall on job ${cardData.id} (htmlLen=${htmlLength})`);
         await pushResult(cardData);
         return;
     }
@@ -244,13 +254,19 @@ async function handleJobDetail(request, $, response) {
         if (statusCode === 999) {
             log.warning(`⚠️ LinkedIn 999 (blocked) on job ${cardData.id}, pushing partial data`);
         } else {
-            log.debug(`⚠️ Status ${statusCode} on detail ${cardData.id}`);
+            log.warning(`⚠️ Status ${statusCode} on detail ${cardData.id} (htmlLen=${htmlLength})`);
         }
         await pushResult(cardData);
         return;
     }
 
     const detail = parseJobDetail($);
+
+    // Debug: log whether description was parsed
+    if (totalScraped < 5) {
+        log.info(`🔍 DEBUG parsed job ${cardData.id}: descLen=${detail.descriptionText?.length || 0}, seniority=${detail.seniorityLevel || 'null'}, salary="${detail.salary || ''}", applicants=${detail.applicantsCount || 'null'}`);
+    }
+
     const merged = { ...cardData, ...detail };
 
     // Queue company scrape if enabled
