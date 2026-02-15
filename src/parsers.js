@@ -122,20 +122,33 @@ export function parseJobCards($) {
 export function parseJobDetail($) {
     const detail = {};
 
-    // ── Description ──
-    const descEl =
-        $('div.show-more-less-html__markup').first() ||
-        $('div.description__text .core-section-container__content').first();
-
-    detail.descriptionHtml = descEl.html()?.trim() || null;
-    detail.descriptionText = descEl.text()?.trim() || null;
+    // ── Description (LinkedIn uses div.show-more-less-html__markup or div.description__text) ──
+    let descEl = $('div.show-more-less-html__markup').first();
+    if (!descEl.length || descEl.text().trim().length < 50) {
+        descEl = $('div.description__text').first();
+    }
+    if (!descEl.length || descEl.text().trim().length < 50) {
+        descEl = $('div[class*="show-more-less-html__markup"]').first();
+    }
+    if (!descEl.length || descEl.text().trim().length < 50) {
+        descEl = $('[class*="description__text"]').first();
+    }
+    if (!descEl.length) {
+        descEl = $('[class*=description] > section > div, [class*=description] section div').first();
+    }
+    detail.descriptionHtml = descEl?.html()?.trim() || null;
+    detail.descriptionText = descEl?.text()?.trim() || null;
 
     // ── Job criteria (seniority, type, function, industry) ──
-    $('li.description__job-criteria-item').each((_, el) => {
+    const criteriaContainer = $('ul.description__job-criteria-list, [class*=_job-criteria-list], [class*="job-criteria"]');
+    const criteriaItems = criteriaContainer.find('li').length
+        ? criteriaContainer.find('li')
+        : $('li.description__job-criteria-item');
+    criteriaItems.each((_, el) => {
         const $item = $(el);
-        const label = ($item.find('h3').text() || '').trim().toLowerCase();
-        const value = ($item.find('span').text() || '').trim();
-        if (!value) return;
+        const label = ($item.find('h3.description__job-criteria-subheader').text() || $item.find('h3, h4').text() || '').trim().toLowerCase();
+        const value = ($item.find('span.description__job-criteria-text').text() || $item.find('span').last().text() || '').trim();
+        if (!value || value.length > 300) return;
 
         if (label.includes('seniority') || label.includes('experience')) {
             detail.seniorityLevel = value;
@@ -152,29 +165,37 @@ export function parseJobDetail($) {
     const applicantsText = (
         $('span.num-applicants__caption').text() ||
         $('figcaption').text() ||
+        $('*').filter((_, el) => /applicants?/i.test($(el).text())).first().text() ||
         ''
     ).trim();
-    const appMatch = applicantsText.match(/([\d,]+)/);
+    const appMatch = applicantsText.match(/([\d,]+)\s*applicants?/i) || applicantsText.match(/([\d,]+)/);
     if (appMatch) {
         detail.applicantsCount = appMatch[1].replace(/,/g, '');
     }
 
-    // ── Apply URL ──
-    const applyLink =
+    // ── Apply URL (LinkedIn embeds it in HTML comment: code#applyUrl) ──
+    let applyLink =
         $('a.apply-button').attr('href') ||
         $('a[data-tracking-control-name*="apply"]').attr('href') ||
-        $('code#applyUrl').text().trim() ||
         '';
+    if (!applyLink) {
+        const codeHtml = $('code#applyUrl').html() || '';
+        const urlMatch = codeHtml.match(/"((https?:[^"]+))"/);
+        if (urlMatch) applyLink = urlMatch[1];
+    }
     detail.applyUrl = applyLink ? normalizeUrl(applyLink) : '';
 
-    // ── Salary (string, for competitor compatibility) ──
-    const salaryText = $('span.compensation__salary').text()?.trim() ||
+    // ── Salary (LinkedIn: div.salary.compensation__salary or div.compensation__salary-range) ──
+    const salaryText = $('div.salary.compensation__salary').text()?.trim() ||
+        $('div.compensation__salary').text()?.trim() ||
+        $('span.compensation__salary').text()?.trim() ||
         $('div.compensation__range').text()?.trim() ||
+        $('div.compensation__salary-range').text()?.trim() ||
         '';
     detail.salary = salaryText || '';
 
     // ── Job poster info ──
-    const posterCard = $('div.message-the-recruiter, div.base-main-card');
+    const posterCard = $('div.message-the-recruiter, div.base-main-card, [class*="recruiter"], [class*="poster"]');
     if (posterCard.length) {
         detail.jobPosterName = (
             posterCard.find('h3.base-main-card__title').text() ||
