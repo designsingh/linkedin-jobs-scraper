@@ -134,19 +134,15 @@ log.info(`🚀 Starting scrape. Target: up to ${maxItems} jobs.`);
 const crawler = new CheerioCrawler({
     requestQueue,
     proxyConfiguration,
-    maxConcurrency: 5,
-    maxRequestRetries: 3,
+    maxConcurrency: 3,
+    maxRequestRetries: 5,
     requestHandlerTimeoutSecs: 60,
+    sessionPoolOptions: { maxPoolSize: 20 },
+    useSessionPool: true,
+    persistCookiesPerSession: true,
 
-    // No proxy for JOB_DETAIL/COMPANY so LinkedIn returns full HTML (Crawlee requires real ProxyConfiguration).
-    preNavigationHooks: [
-        ({ request }, gotOptions) => {
-            const type = request.userData?.type;
-            if (type === 'JOB_DETAIL' || type === 'COMPANY') {
-                gotOptions.proxyUrl = undefined;
-            }
-        },
-    ],
+    // Tell Crawlee not to auto-throw on 429 — we handle it ourselves with backoff
+    ignoreHttpErrorStatusCodes: [429, 999],
 
     async requestHandler({ request, $, response }) {
         const { type } = request.userData;
@@ -211,9 +207,9 @@ async function handleSearch(request, $, response) {
         const cardWithInput = { ...card, inputUrl: searchInputUrl };
 
         if (scrapeJobDetails) {
-            const jobOrigin = getLinkedInOrigin(card.link || card.companyLinkedinUrl);
+            // Always use www.linkedin.com for the guest API (regional subdomains like ca. get blocked)
             await requestQueue.addRequest({
-                url: `${jobOrigin}/jobs-guest/jobs/api/jobPosting/${card.id}`,
+                url: `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${card.id}`,
                 uniqueKey: `detail-${card.id}`,
                 userData: { type: 'JOB_DETAIL', cardData: cardWithInput },
             }, { forefront: true });
@@ -235,7 +231,15 @@ async function handleJobDetail(request, $, response) {
     const statusCode = response?.statusCode;
     const htmlLength = $.html()?.length || 0;
 
-    // Debug: log response info for first few jobs so we can diagnose empty descriptions
+    // Handle 429 rate limit: throw so Crawlee retries with a different session/proxy
+    if (statusCode === 429 || statusCode === 999) {
+        const backoff = (request.retryCount || 0) * 3000 + randomDelay(2000, 5000);
+        log.warning(`⚠️ Rate limited (${statusCode}) on job ${cardData.id}, waiting ${Math.round(backoff / 1000)}s before retry`);
+        await sleep(backoff);
+        throw new Error(`Rate limited ${statusCode} on job ${cardData.id}`);
+    }
+
+    // Debug: log response info for first few jobs
     if (totalScraped < 5) {
         const hasDesc = $('div.show-more-less-html__markup').length > 0;
         const hasDescAlt = $('div.description__text').length > 0;
@@ -251,11 +255,7 @@ async function handleJobDetail(request, $, response) {
     }
 
     if (statusCode !== 200) {
-        if (statusCode === 999) {
-            log.warning(`⚠️ LinkedIn 999 (blocked) on job ${cardData.id}, pushing partial data`);
-        } else {
-            log.warning(`⚠️ Status ${statusCode} on detail ${cardData.id} (htmlLen=${htmlLength})`);
-        }
+        log.warning(`⚠️ Status ${statusCode} on detail ${cardData.id} (htmlLen=${htmlLength})`);
         await pushResult(cardData);
         return;
     }
@@ -278,9 +278,8 @@ async function handleJobDetail(request, $, response) {
                 Object.assign(merged, companyCache.get(slug));
                 await pushResult(merged);
             } else {
-                // Queue company page (preserve subdomain from card, e.g. ca.linkedin.com)
-                const companyOrigin = getLinkedInOrigin(cardData.companyLinkedinUrl);
-                const companyUrl = `${companyOrigin}/company/${slug}/about/`;
+                // Queue company page (always use www to avoid regional blocks)
+                const companyUrl = `https://www.linkedin.com/company/${slug}/about/`;
                 const wasAdded = await requestQueue.addRequest({
                     url: companyUrl,
                     uniqueKey: `company-${slug}`,
@@ -316,6 +315,14 @@ async function handleCompany(request, $, response) {
     const { slug, pendingJobs = [] } = request.userData;
     const statusCode = response?.statusCode;
 
+    // Handle 429/999 with backoff retry
+    if (statusCode === 429 || statusCode === 999) {
+        const backoff = (request.retryCount || 0) * 3000 + randomDelay(2000, 5000);
+        log.warning(`⚠️ Rate limited (${statusCode}) on company ${slug}, waiting ${Math.round(backoff / 1000)}s before retry`);
+        await sleep(backoff);
+        throw new Error(`Rate limited ${statusCode} on company ${slug}`);
+    }
+
     let companyData = {};
 
     if (statusCode === 200 && !isLoginWall($, statusCode)) {
@@ -323,11 +330,7 @@ async function handleCompany(request, $, response) {
         companyCache.set(slug, companyData);
         log.debug(`🏢 Scraped company: ${slug}`);
     } else {
-        if (statusCode === 999) {
-            log.warning(`⚠️ LinkedIn 999 (blocked) on company ${slug}`);
-        } else {
-            log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
-        }
+        log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
         companyCache.set(slug, {}); // Cache empty to avoid retrying
     }
 
