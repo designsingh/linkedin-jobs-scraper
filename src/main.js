@@ -229,43 +229,28 @@ async function handleJobDetail(request, $, response) {
 
     const { cardData } = request.userData;
     const statusCode = response?.statusCode;
-    const htmlLength = $.html()?.length || 0;
 
     // Handle 429 rate limit: throw so Crawlee retries with a different session/proxy
     if (statusCode === 429 || statusCode === 999) {
         const backoff = (request.retryCount || 0) * 3000 + randomDelay(2000, 5000);
-        log.warning(`⚠️ Rate limited (${statusCode}) on job ${cardData.id}, waiting ${Math.round(backoff / 1000)}s before retry`);
+        log.warning(`⚠️ Rate limited (${statusCode}) on job ${cardData.id}, retrying in ${Math.round(backoff / 1000)}s`);
         await sleep(backoff);
         throw new Error(`Rate limited ${statusCode} on job ${cardData.id}`);
     }
 
-    // Debug: log response info for first few jobs
-    if (totalScraped < 5) {
-        const hasDesc = $('div.show-more-less-html__markup').length > 0;
-        const hasDescAlt = $('div.description__text').length > 0;
-        const hasCriteria = $('li.description__job-criteria-item').length;
-        const titleText = $('h2').first().text().trim().slice(0, 50);
-        log.info(`🔍 DEBUG job ${cardData.id}: status=${statusCode}, htmlLen=${htmlLength}, hasDesc=${hasDesc}, hasDescAlt=${hasDescAlt}, criteria=${hasCriteria}, title="${titleText}", url=${request.url}`);
-    }
-
     if (isLoginWall($, statusCode)) {
-        log.warning(`🔒 Login wall on job ${cardData.id} (htmlLen=${htmlLength})`);
+        log.debug(`🔒 Login wall on job ${cardData.id}`);
         await pushResult(cardData);
         return;
     }
 
     if (statusCode !== 200) {
-        log.warning(`⚠️ Status ${statusCode} on detail ${cardData.id} (htmlLen=${htmlLength})`);
+        log.debug(`⚠️ Status ${statusCode} on detail ${cardData.id}`);
         await pushResult(cardData);
         return;
     }
 
     const detail = parseJobDetail($);
-
-    // Debug: log whether description was parsed
-    if (totalScraped < 5) {
-        log.info(`🔍 DEBUG parsed job ${cardData.id}: descLen=${detail.descriptionText?.length || 0}, seniority=${detail.seniorityLevel || 'null'}, salary="${detail.salary || ''}", applicants=${detail.applicantsCount || 'null'}`);
-    }
 
     const merged = { ...cardData, ...detail };
 
@@ -315,23 +300,19 @@ async function handleCompany(request, $, response) {
     const { slug, pendingJobs = [] } = request.userData;
     const statusCode = response?.statusCode;
 
-    // Handle 429/999 with backoff retry
-    if (statusCode === 429 || statusCode === 999) {
-        const backoff = (request.retryCount || 0) * 3000 + randomDelay(2000, 5000);
-        log.warning(`⚠️ Rate limited (${statusCode}) on company ${slug}, waiting ${Math.round(backoff / 1000)}s before retry`);
-        await sleep(backoff);
-        throw new Error(`Rate limited ${statusCode} on company ${slug}`);
-    }
-
     let companyData = {};
 
-    if (statusCode === 200 && !isLoginWall($, statusCode)) {
+    if (statusCode === 999 || statusCode === 429) {
+        // LinkedIn blocks company pages aggressively — don't retry, just push without company data
+        log.debug(`⚠️ Company ${slug} blocked (${statusCode}), skipping`);
+        companyCache.set(slug, {});
+    } else if (statusCode === 200 && !isLoginWall($, statusCode)) {
         companyData = parseCompanyPage($);
         companyCache.set(slug, companyData);
         log.debug(`🏢 Scraped company: ${slug}`);
     } else {
         log.debug(`⚠️ Could not scrape company ${slug} (status ${statusCode})`);
-        companyCache.set(slug, {}); // Cache empty to avoid retrying
+        companyCache.set(slug, {});
     }
 
     // Push all pending jobs that were waiting on this company
