@@ -338,11 +338,24 @@ function parseCompanyAddress($) {
  */
 export function isLoginWall($, statusCode) {
     if (statusCode === 401 || statusCode === 403) return true;
+
+    // If the page has real job content, it's NOT a login wall
+    // (public LinkedIn pages always contain /login links for sign-in buttons)
+    const hasDescription = $('div.show-more-less-html__markup').length > 0 ||
+        $('div.description__text').length > 0;
+    const hasCriteria = $('li.description__job-criteria-item').length > 0;
+    const hasCompanyInfo = $('section.core-section-container').length > 0 ||
+        $('dt').length > 0;
+    if (hasDescription || hasCriteria || hasCompanyInfo) return false;
+
+    // Only flag as login wall if the page is actually just a login/auth redirect
     const html = $.html() || '';
-    return (
-        html.includes('authwall') ||
+    const isAuthWall = html.includes('authwall') ||
         html.includes('sign-in-modal') ||
-        html.includes('uas-login') ||
-        html.includes('/login')
-    );
+        html.includes('uas-login');
+
+    // Also check if the page is very short (a real auth redirect is typically small)
+    const isShortPage = html.length < 5000;
+
+    return isAuthWall || (isShortPage && html.includes('/login'));
 }
